@@ -1,10 +1,11 @@
-ARG FRAPPE_VERSION=version-15
-
-# Start from the official ERPNext image (already has frappe + erpnext + hrms)
-FROM frappe/erpnext:${FRAPPE_VERSION}
+# Use the official ERPNext image which has everything pre-installed
+FROM frappe/erpnext:version-15
 
 USER frappe
 
-# Override the default HRMS app with our MIRAIYUG branded version
-# This replaces only the branded files (logo, app name, hooks.py, etc.)
-COPY --chown=frappe:frappe hrms/ /home/frappe/frappe-bench/apps/hrms/hrms/
+# We will overwrite the base hrms app with our branded local version
+# Instead of just the code, we copy the whole app directory
+COPY --chown=frappe:frappe . /home/frappe/frappe-bench/apps/hrms/
+
+# Tell Python to recognize our changed app code
+RUN pip install --user -e /home/frappe/frappe-bench/apps/hrms
