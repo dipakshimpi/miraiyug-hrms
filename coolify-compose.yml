@@ -1,70 +1,134 @@
-version: "3"
+x-backend-defaults: &backend_defaults
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      FRAPPE_VERSION: version-15
+  restart: on-failure
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+  environment:
+    DB_HOST: db
+    DB_PORT: "3306"
+    REDIS_CACHE: redis-cache:6379
+    REDIS_QUEUE: redis-queue:6379
+    REDIS_SOCKETIO: redis-socketio:6379
+    SOCKETIO_PORT: "9000"
 
 services:
-  backend:
-    build: 
-      context: .
-      target: backend
-    restart: on-failure
-    environment:
-      - DB_HOST=db
-      - DB_PORT=3306
-      - REDIS_CACHE=redis-cache:6379
-      - REDIS_QUEUE=redis-queue:6379
-      - REDIS_SOCKETIO=redis-socketio:6379
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
+  # ─── Site Configurator (runs ONCE on first deploy) ───────────────────────────
+  configurator:
+    <<: *backend_defaults
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_SOCKETIO";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
 
+  # ─── Site Creator (runs ONCE to create the hrms site) ───────────────────────
+  create-site:
+    <<: *backend_defaults
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        wait-for-it -t 120 db:3306;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | python -c "import sys, json; sys.stdout.write(json.load(sys.stdin).get('db_host', ''))"` ]]; do
+          echo "Waiting for configurator..."; sleep 2;
+        done;
+        bench new-site miraiyug.local
+          --mariadb-user-host-login-scope='%'
+          --admin-password=admin
+          --db-root-password=admin
+          --install-app erpnext
+          --install-app hrms
+          --set-default || true;
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  # ─── Python Backend (Gunicorn) ────────────────────────────────────────────────
+  backend:
+    <<: *backend_defaults
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  # ─── WebSocket Server ─────────────────────────────────────────────────────────
+  websocket:
+    <<: *backend_defaults
+    command: node /home/frappe/frappe-bench/apps/frappe/socketio.js
+
+  # ─── Queue Workers ─────────────────────────────────────────────────────────────
+  queue-short:
+    <<: *backend_defaults
+    command: bench worker --queue short,default
+
+  queue-long:
+    <<: *backend_defaults
+    command: bench worker --queue long,default,short
+
+  # ─── Scheduler ─────────────────────────────────────────────────────────────────
+  scheduler:
+    <<: *backend_defaults
+    command: bench schedule
+
+  # ─── Frontend (Nginx reverse proxy) ──────────────────────────────────────────
   frontend:
     build:
       context: .
-      target: backend
-    command: >
-      bash -c "bench serve --port 8080"
+      dockerfile: Dockerfile
+      args:
+        FRAPPE_VERSION: version-15
     restart: on-failure
     environment:
-      - DB_HOST=db
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: miraiyug.local
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: "50m"
     ports:
       - "8080:8080"
     volumes:
       - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      backend:
+        condition: service_started
+      websocket:
+        condition: service_started
 
-  schedule:
-    build:
-      context: .
-      target: backend
-    command: bench schedule
-    restart: on-failure
-    environment:
-      - DB_HOST=db
-      - DB_PORT=3306
-      - REDIS_CACHE=redis-cache:6379
-      - REDIS_QUEUE=redis-queue:6379
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
-
-  worker-default:
-    build:
-      context: .
-      target: backend
-    command: bench worker --queue default
-    restart: on-failure
-    environment:
-      - DB_HOST=db
-      - REDIS_CACHE=redis-cache:6379
-      - REDIS_QUEUE=redis-queue:6379
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
-
+  # ─── Database ──────────────────────────────────────────────────────────────────
   db:
     image: mariadb:10.6
     restart: on-failure
+    healthcheck:
+      test: mysqladmin ping -h localhost --password=admin
+      interval: 1s
+      retries: 20
     environment:
-      - MYSQL_ROOT_PASSWORD=admin
+      MYSQL_ROOT_PASSWORD: admin
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -73,57 +137,20 @@ services:
     volumes:
       - db-data:/var/lib/mysql
 
+  # ─── Redis Services ────────────────────────────────────────────────────────────
   redis-cache:
     image: redis:alpine
     restart: on-failure
-    volumes:
-      - redis-cache-data:/data
 
   redis-queue:
     image: redis:alpine
     restart: on-failure
-    volumes:
-      - redis-queue-data:/data
 
   redis-socketio:
     image: redis:alpine
     restart: on-failure
-    volumes:
-      - redis-socketio-data:/data
-
-  configurator:
-    build:
-      context: .
-      target: backend
-    command:
-      - bash
-      - -c
-      - |
-        bench set-config -g db_host $$DB_HOST && \
-        bench set-config -g redis_cache "redis://$$REDIS_CACHE" && \
-        bench set-config -g redis_queue "redis://$$REDIS_QUEUE" && \
-        bench set-config -g redis_socketio "redis://$$REDIS_SOCKETIO" && \
-        bench set-config -p db_port $$DB_PORT && \
-        bench new-site miraiyug.local --force \
-          --mariadb-root-password admin \
-          --admin-password admin \
-          --install-app hrms && \
-        bench use miraiyug.local
-    environment:
-      - DB_HOST=db
-      - DB_PORT=3306
-      - REDIS_CACHE=redis-cache:6379
-      - REDIS_QUEUE=redis-queue:6379
-      - REDIS_SOCKETIO=redis-socketio:6379
-    restart: "no"
-    volumes:
-      - sites:/home/frappe/frappe-bench/sites
-      - logs:/home/frappe/frappe-bench/logs
 
 volumes:
   sites:
   logs:
   db-data:
-  redis-cache-data:
-  redis-queue-data:
-  redis-socketio-data:

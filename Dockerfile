@@ -1,7 +1,10 @@
 ARG FRAPPE_VERSION=version-15
 
-# Backend Image (Python logic)
-FROM frappe/erpnext:${FRAPPE_VERSION} AS backend
+# Start from the official ERPNext image (already has frappe + erpnext + hrms)
+FROM frappe/erpnext:${FRAPPE_VERSION}
+
 USER frappe
-# Clone and install the Miraiyug HRMS branded app
-RUN bench get-app hrms https://github.com/dipakshimpi/miraiyug-hrms.git --branch main
+
+# Override the default HRMS app with our MIRAIYUG branded version
+# This replaces only the branded files (logo, app name, hooks.py, etc.)
+COPY --chown=frappe:frappe hrms/ /home/frappe/frappe-bench/apps/hrms/hrms/
