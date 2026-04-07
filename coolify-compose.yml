@@ -36,7 +36,6 @@ services:
       - sites:/home/frappe/frappe-bench/sites
 
   # ─── Frontend (Nginx) ──────────────────────────────────────────────────────
-  # NOTE: Using the unified image with the nginx-entrypoint.sh command
   frontend:
     image: frappe/erpnext:version-15
     command: nginx-entrypoint.sh
@@ -79,7 +78,7 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
 
-  # ─── INITIAL SITE CREATOR (Runs once) ──────────────────────────────────────
+  # ─── INITIAL SITE CREATOR ──────────────────────────────────────
   create-site:
     image: frappe/erpnext:version-15
     command:
