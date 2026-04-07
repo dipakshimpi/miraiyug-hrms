@@ -55,7 +55,7 @@ services:
         until [[ -n `grep -hs ^ sites/common_site_config.json | python -c "import sys, json; sys.stdout.write(json.load(sys.stdin).get('db_host', ''))"` ]]; do
           echo "Waiting for configurator..."; sleep 2;
         done;
-        bench new-site miraiyug.local \
+        bench new-site miraiyug.local --force \
           --mariadb-user-host-login-scope='%' \
           --admin-password=admin \
           --db-root-password=admin \
