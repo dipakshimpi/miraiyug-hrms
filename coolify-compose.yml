@@ -93,6 +93,7 @@ services:
     command: bench schedule
 
   # ─── Frontend (Nginx reverse proxy) ──────────────────────────────────────────
+  # NOTE: No port mapping here — Coolify's Traefik proxy routes traffic automatically
   frontend:
     build:
       context: .
@@ -109,8 +110,8 @@ services:
       UPSTREAM_REAL_IP_RECURSIVE: "off"
       PROXY_READ_TIMEOUT: "120"
       CLIENT_MAX_BODY_SIZE: "50m"
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     volumes:
       - sites:/home/frappe/frappe-bench/sites
     depends_on:
