@@ -93,26 +93,24 @@ services:
     command: bench schedule
 
   # ─── Frontend (Nginx reverse proxy) ──────────────────────────────────────────
-  # NOTE: No port mapping here — Coolify's Traefik proxy routes traffic automatically
+  # NOTE: This is the 'receptionist' that handles all web traffic and routes it to the backend.
   frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        FRAPPE_VERSION: version-15
+    image: frappe/erpnext-nginx:version-15
     restart: on-failure
     environment:
-      BACKEND: backend:8000
-      SOCKETIO: websocket:9000
-      FRAPPE_SITE_NAME_HEADER: miraiyug.local
       UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
       UPSTREAM_REAL_IP_RECURSIVE: "off"
       PROXY_READ_TIMEOUT: "120"
       CLIENT_MAX_BODY_SIZE: "50m"
+      # These must match the service names in this file
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: miraiyug.local
     expose:
       - "8080"
     volumes:
+      - sites:/var/www/html/assets
       - sites:/home/frappe/frappe-bench/sites
     depends_on:
       backend:
